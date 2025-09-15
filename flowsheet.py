@@ -2,6 +2,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 from collections import defaultdict
+from tkinter import Tk, filedialog
 import matplotlib.pyplot as plt
 
 
@@ -16,6 +17,8 @@ LINE_RE = re.compile(rf"^\s*BLOCK\s+({TOKEN})\s+(.*?)\s*$", re.MULTILINE)
 IN_RE  = re.compile(rf"\bIN=([A-Za-z0-9_ ]+?)(?=\s+OUT=|\s*$)")
 # Extract OUT=... to end of line
 OUT_RE = re.compile(rf"\bOUT=([A-Za-z0-9_ ]+)\s*$")
+
+file_path = ""
 
 @dataclass
 class Block:
@@ -45,47 +48,45 @@ def parse_flowsheet(text: str) -> Dict[str, Block]:
 
         blocks[ID] = blk
 
+    # # Debug: print parsed blocks
+    # for ID, b in blocks.items():
+    #     print(f"{ID}: IN={b.inputs}  OUT={b.outputs}")
+
     return blocks
 
-# ---------- example usage ----------
-if __name__ == "__main__":
-    flowsheet_text = """
-    FLOWSHEET
-        BLOCK COOL1 IN=CO2FEED CW1 OUT=TOSEP1 HW1
-        BLOCK SEP1 IN=TOSEP1 OUT=V1 L1
-        BLOCK COMP1 IN=V1 V5 OUT=TOHX1
-        BLOCK COOL2 IN=TOCOL2 CW2 OUT=TOSEP2 HW2
-        BLOCK SEP2 IN=TOSEP2 OUT=V2 L2
-        BLOCK COMP2 IN=V2 OUT=TOCOL3
-        BLOCK COOL3 IN=TOCOL3 CW3 OUT=TOSEP3 HW3
-        BLOCK SEP3 IN=TOSEP3 OUT=V3 L3
-        BLOCK COMP3 IN=V3 OUT=TOCOL4
-        BLOCK SEP4 IN=TOSEP4 OUT=WETGAS L4
-        BLOCK COMP4 IN=DRYGAS OUT=TOCOL5
-        BLOCK COOL5 IN=TOCOL5 CW5 OUT=TOPUMP HW5
-        BLOCK PUMP1 IN=TOPUMP OUT=TOCOL6
-        BLOCK ABS IN=TOABS WETGAS OUT=DRYGAS TOVLV
-        BLOCK REG IN=TOREG OUT=GAS REGBOT
-        BLOCK MU IN=TOMU TEGMU OUT=TOPUMP2
-        BLOCK PUMP2 IN=TOPUMP2 OUT=TOABS
-        BLOCK GCO IN=O2 TOGCO OUT=OXDPROD
-        BLOCK HX1 IN=OXDPROD TOHX1 OUT=TOCOL2 TOSCO
-        BLOCK COOL7 IN=GAS CW7 OUT=CO2RCY HW7
-        BLOCK SEP5 IN=CO2RCY OUT=V5 L5
-        BLOCK COOL4 IN=TOCOL4 CW4 OUT=TOSEP4 HW4
-        BLOCK COOL6 IN=TOCOL6 CW6 OUT=TOTRAN HW6
-        BLOCK MIX IN=HW6 HW5 HW3 HW4 HW2 HW1 HW7 OUT=TOTW
-        BLOCK VLV IN=TOVLV OUT=TOHX2
-        BLOCK SCO IN=TOSCO FEO OUT=TOSPLIT
-        BLOCK HX2 IN=REGBOT TOHX2 OUT=TOCOL8 TOREG
-        BLOCK COOL8 IN=TOCOL8 CW8 OUT=TOMU HW8
-        BLOCK SPLIT IN=TOSPLIT OUT=TOGCO FES
-    """
+def reading_in_flowsheet():
+    Tk().withdraw()
+    global file_path
+    # Prompt user to select a file with .inp extension
+    file_path = filedialog.askopenfilename(
+        title="Select a .inp file",
+        filetypes=[("Input files", "*.inp")]
+    )
 
-    blocks = parse_flowsheet(flowsheet_text)
-    for ID, b in blocks.items():
-        print(f"{ID}: IN={b.inputs}  OUT={b.outputs}")
+    if not file_path:
+        raise FileNotFoundError("No file selected.")
 
+    file_path = file_path
+
+    # Read the contents of the selected file
+    with open(file_path, 'r') as file:
+        file_contents = file.read()
+
+     # Find the start of the flowsheet section
+    flowsheet_start = file_contents.find("FLOWSHEET")
+    if flowsheet_start == -1:
+        raise ValueError("No 'flowsheet' section found in the file.")
+
+    # Extract lines starting with 'BLOCK' after the 'flowsheet' section
+    flowsheet_lines = []
+    for line in file_contents[flowsheet_start:].splitlines():
+        if line.strip().upper().startswith("BLOCK"):
+            flowsheet_lines.append(line)
+
+    # Combine the extracted lines into a single string
+    flowsheet_text = "\n".join(flowsheet_lines)
+
+    return flowsheet_text
 
 
 def find_first_elements(blocks: Dict[str, Block]) -> List[str]:
@@ -114,7 +115,6 @@ def find_last_elements(blocks: Dict[str, Block]) -> List[str]:
             last_element.append(block.ID)
     return last_element
 
-print("last element: ", find_last_elements(blocks))
 
 
 def build_flowsheet_tree(blocks: Dict[str, Block], roots: List[str]) -> List[List[str]]:
@@ -245,30 +245,65 @@ def draw_flowsheet(blocks: Dict[str, Block], coords: Dict[str, Tuple[float,float
     ax.grid(True)
     plt.show()
 
-def emit_pfsdata(blocks: Dict[str, Block], coords: Dict[str, Tuple[float,float]]) -> str:
-    lines = []
-    lines.append(";PFSVData\n")
-    lines.append(f";# of PFS Objects = {len(blocks)}\n")
-    lines.append(";SIZE 1.000000 0.000000 0.000000 100.000000\n")
-    for bid, (x,y) in coords.items():
-        lines.extend([
-            ";BLOCK\n",
-            f";ID: {bid}\n",
-            ";Version: 1\n",
-            ';ICON: "BLOCK"\n',
-            ";Flag 0\n",
-            ";Section GLOBAL\n",
-            f";At {x:.6f} {y:.6f}\n",
-            ";Label At 0.000000 0.750000\n",
-            ";Scale 1.000000 Modifier 0\n"
-        ])
-    return "".join(lines)
+def blocks(coords: Dict[str, Tuple[float,float]]) -> str:
+    """
+    Parse the input file to find blocks and generate pfsdata output.
+    """
+    # Read the contents of the file
+    with open(file_path, 'r') as file:
+        file_contents = file.read()
 
-blocks = parse_flowsheet(flowsheet_text)
-roots = find_first_elements(blocks)
-end = find_last_elements(blocks)
-layers = build_layers(blocks, roots)
-coords = assign_coordinates(layers, dx=8.0, dy=4.0)
+        lines = file_contents.splitlines()
+        idx = 0
+        while idx < len(lines):
+            if lines[idx] == ";BLOCK":
+                current_block_id = None  # Reset for a new block
+            elif ";ID:" in lines[idx]:
+                current_block_id = lines[idx].split(":")[1].strip()
+                if current_block_id in coords:
+                    # Continue until ";AT" is found
+                    #Version
+                    idx +=1
+                    version_line = lines[idx]
+                    # Icon Line
+                    idx +=1
+                    icon_line = lines[idx]
+                    #Flag line
+                    idx +=1
+                    flag_line = lines[idx]
+                    #Section line
+                    idx +=1
+                    section_line = lines[idx]
+
+                    #moving to next line to find ;AT
+                    idx +=1
+                    if ";At" in lines[idx]:
+                        x, y = coords[current_block_id]
+                        print("Lines ", lines[idx])
+                        # Replace the coordinates in the ";AT" line
+                        print(f"Setting block {current_block_id} to coordinates ({x:.1f}, {y:.1f})")
+                        lines[idx] = f";At {x:.1f} {y:.1f}"
+
+                        #Label at line
+                        idx +=1
+                        label_at_line = lines[idx]
+                        #scale line
+                        idx +=1
+                        scale_line = lines[idx]
+
+                    else:
+                        raise ValueError(f";At line not found for block {current_block_id}")
+            idx += 1
+
+
+
+
+    #Save the updated file contents back to the file
+    with open(file_path, 'w') as f:
+        f.writelines("\n".join(lines))
+
+    return file_contents
+
 
 def assign_coordinates(layers, dx=10.0, dy=6.0, spread=1.0):
     """
@@ -300,7 +335,6 @@ def draw_flowsheet(blocks, coords, figsize=(14, 8), margin=6.0):
     xmin, xmax = min(xs)-margin, max(xs)+margin
     ymin, ymax = min(ys)-margin, max(ys)+margin
 
-    import matplotlib.pyplot as plt
     fig, ax = plt.subplots(figsize=figsize)
 
     # edges
@@ -325,13 +359,78 @@ def draw_flowsheet(blocks, coords, figsize=(14, 8), margin=6.0):
     ax.set_ylabel("Relative position")
     plt.show()
 
-layers = build_layers(blocks, roots)
 
-# Option A: just increase spacing
-coords = assign_coordinates(layers, dx=1, dy=1000.0, spread=1)
+def streams():
+    with open(file_path, 'r') as file:
+        file_contents = file.read()
 
-# Option B: scale after the fact
-coords = assign_coordinates(layers, dx=10.0, dy=50.0)
-coords = rescale_coords(coords, factor=1.5)
+        lines = file_contents.splitlines()
+        idx = 0
+        while idx < len(lines):
+            if lines[idx] == ";STREAM":
+                current_stream_id = None  # Reset for a new stream
+            elif ";ID:" in lines[idx]:
+                current_stream_id = lines[idx].split(":")[1].strip()
+                if current_stream_id in coords:
+                    # Continue until ";AT" is found
+                    #Version
+                    idx +=1
+                    version_line = lines[idx]
+                    #Flag line
+                    idx +=1
+                    flag_line = lines[idx]
+                    #Section line
+                    idx +=1
+                    section_line = lines[idx]
+                    # Type Line
+                    idx +=1
+                    icon_line = lines[idx]
 
-draw_flowsheet(blocks, coords, figsize=(16,9), margin=8.0)
+                    #moving to next line to find ;AT
+                    idx +=1
+                    if ";At" in lines[idx]:
+                        x, y = coords[current_stream_id]
+                        print("Lines ", lines[idx])
+                        # Replace the coordinates in the ";AT" line
+                        print(f"Setting stream {current_stream_id} to coordinates ({x:.1f}, {y:.1f})")
+                        lines[idx] = f";At {x:.1f} {y:.1f}"
+
+                        #Label at line
+                        idx +=1
+                        label_at_line = lines[idx]
+                        #scale line
+                        idx +=1
+                        scale_line = lines[idx]
+
+                    else:
+                        raise ValueError(f";At line not found for block {current_block_id}")
+            idx += 1
+
+
+
+
+    #Save the updated file contents back to the file
+    with open(file_path, 'w') as f:
+        f.writelines("\n".join(lines))
+
+    return file_contents
+
+# ---------- example usage ----------
+if __name__ == "__main__":
+    # prompt user to select file type .inp
+    flowsheet_text = reading_in_flowsheet()
+
+    blocks = parse_flowsheet(flowsheet_text)
+
+    blocks = parse_flowsheet(flowsheet_text)
+    roots = find_first_elements(blocks)
+    end = find_last_elements(blocks)
+
+    layers = build_layers(blocks, roots)
+
+    coords = assign_coordinates(layers, dx=3, dy=5)
+
+    draw_flowsheet(blocks, coords, figsize=(16,9), margin=8.0)
+
+    psvsdata = blocks(coords)
+    # print(psvsdata)
