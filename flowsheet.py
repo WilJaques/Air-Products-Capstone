@@ -25,19 +25,32 @@ class Block:
     ID: str
     inputs: List[str] = field(default_factory=list)
     outputs: List[str] = field(default_factory=list)
-    x_coord: int = 0
-    y_coord: int = 0
+    x_coord: float = 0
+    y_coord: float = 0
+
+@dataclass
+class Stream:
+    ID: str
+    inputs: List[str] = field(default_factory=list)
+    outputs: List[str] = field(default_factory=list)
+    x_coord: float = 0
+    y_coord: float = 0
+    # route 0 0
+    x_coord_route: List[List[float]] = 0
+    y_coord_route: List[List[float]] = 0
+
 
 def parse_flowsheet(text: str) -> Dict[str, Block]:
     """
     Parse BLOCK lines and return {block_ID: Block(ID, inputs, outputs)}.
     """
     blocks: Dict[str, Block] = {}
+    streams: Dict[str, Stream] = {}
 
     for m in LINE_RE.finditer(text):
-        ID, rest = m.group(1), m.group(2)
-        blk = blocks.get(ID) or Block(ID)
-        # Find inputs/outputs independently (order on the line can vary)
+        block_id, rest = m.group(1), m.group(2)
+        blk = blocks.get(block_id) or Block(block_id)
+
         mi = IN_RE.search(rest)
         mo = OUT_RE.search(rest)
 
@@ -46,27 +59,43 @@ def parse_flowsheet(text: str) -> Dict[str, Block]:
         if mo:
             blk.outputs = mo.group(1).split()
 
-        blocks[ID] = blk
+        blocks[block_id] = blk
 
-    # # Debug: print parsed blocks
-    # for ID, b in blocks.items():
-    #     print(f"{ID}: IN={b.inputs}  OUT={b.outputs}")
 
-    return blocks
+        for s in blk.inputs:
+                st = streams.get(s)
+                if st is None:
+                    st = Stream(ID=s)
+                    streams[s] = st
+                if block_id not in st.outputs:
+                    st.outputs.append(block_id)
+
+            # Streams flowing OUT OF this block → stream.inputs include this block
+        for s in blk.outputs:
+            st = streams.get(s)
+            if st is None:
+                st = Stream(ID=s)
+                streams[s] = st
+            if block_id not in st.inputs:
+                st.inputs.append(block_id)
+
+    return blocks, streams
 
 def reading_in_flowsheet():
-    Tk().withdraw()
+    # Tk().withdraw()
+    # global file_path
+    # # Prompt user to select a file with .inp extension
+    # file_path = filedialog.askopenfilename(
+    #     title="Select a .inp file",
+    #     filetypes=[("Input files", "*.inp")]
+    # )
+    #testing
     global file_path
-    # Prompt user to select a file with .inp extension
-    file_path = filedialog.askopenfilename(
-        title="Select a .inp file",
-        filetypes=[("Input files", "*.inp")]
-    )
-
+    # file_path = r"C:\Users\Wiltj\LU Student Dropbox\Wil Jaques\Year 4 Lehigh\CSE 281\Air-Products-Capstone\co2 conditioning (visual).inp"
+    file_path = r"C:\Users\Wiltj\LU Student Dropbox\Wil Jaques\Year 4 Lehigh\CSE 281\Air-Products-Capstone\netlc3rg (visual).inp"
     if not file_path:
         raise FileNotFoundError("No file selected.")
 
-    file_path = file_path
 
     # Read the contents of the selected file
     with open(file_path, 'r') as file:
@@ -215,103 +244,57 @@ def build_layers(blocks: Dict[str, Block], roots: List[str]) -> List[List[str]]:
         layers.append(remaining)
     return layers
 
-def assign_coordinates(layers: List[List[str]], dx: float=10.0, dy: float=6.0) -> Dict[str, Tuple[float,float]]:
-    coords = {}
-    for lx, layer in enumerate(layers):
-        n = len(layer)
-        y0 = -(n-1)/2.0 * dy
-        for i, bid in enumerate(layer):
-            x = lx * dx
-            y = y0 + i*dy
-            coords[bid] = (x, y)
-    return coords
 
-def draw_flowsheet(blocks: Dict[str, Block], coords: Dict[str, Tuple[float,float]]):
-    input_to_blocks, _ = build_index(blocks)
-    fig, ax = plt.subplots(figsize=(12, 6))
-    for b in blocks.values():
-        x1, y1 = coords[b.ID]
-        for o in b.outputs:
-            for nb in input_to_blocks.get(o, []):
-                x2, y2 = coords[nb]
-                ax.plot([x1, x2], [y1, y2])
-    for bid, (x,y) in coords.items():
-        ax.scatter([x], [y], s=150)
-        ax.text(x, y+0.6, bid, ha='center', va='bottom', fontsize=9)
-    ax.set_xlabel("Layer (left → right)")
-    ax.set_ylabel("Relative position")
-    ax.set_title("Auto-arranged flowsheet (schematic)")
-    ax.set_aspect('equal', adjustable='datalim')
-    ax.grid(True)
-    plt.show()
-
-def blocks(coords: Dict[str, Tuple[float,float]]) -> str:
-    """
-    Parse the input file to find blocks and generate pfsdata output.
-    """
-    # Read the contents of the file
+def entering_blocks(blocks: Dict[str, Block]) -> str:
     with open(file_path, 'r') as file:
         file_contents = file.read()
-
         lines = file_contents.splitlines()
-        idx = 0
-        while idx < len(lines):
-            if lines[idx] == ";BLOCK":
-                current_block_id = None  # Reset for a new block
-            elif ";ID:" in lines[idx]:
-                current_block_id = lines[idx].split(":")[1].strip()
-                if current_block_id in coords:
-                    # Continue until ";AT" is found
-                    #Version
-                    idx +=1
-                    version_line = lines[idx]
-                    # Icon Line
-                    idx +=1
-                    icon_line = lines[idx]
-                    #Flag line
-                    idx +=1
-                    flag_line = lines[idx]
-                    #Section line
-                    idx +=1
-                    section_line = lines[idx]
 
-                    #moving to next line to find ;AT
-                    idx +=1
-                    if ";At" in lines[idx]:
-                        x, y = coords[current_block_id]
-                        print("Lines ", lines[idx])
-                        # Replace the coordinates in the ";AT" line
-                        print(f"Setting block {current_block_id} to coordinates ({x:.1f}, {y:.1f})")
-                        lines[idx] = f";At {x:.1f} {y:.1f}"
+    idx = 0
+    while idx < len(lines):
+        if lines[idx] == ";BLOCK":
+            current_block_id = None
+        elif ";ID:" in lines[idx]:
+            current_block_id = lines[idx].split(":")[1].strip()
+            if current_block_id in blocks:
+                # Version
+                idx += 1
+                # Icon
+                idx += 1
+                # Flag
+                idx += 1
+                # Section
+                idx += 1
+                # Move to ;At
+                idx += 1
+                if ";At" in lines[idx]:
+                    b = blocks[current_block_id]
+                    print(f"Setting block {b.ID} at ({b.x_coord:.1f}, {b.y_coord:.1f})")
+                    lines[idx] = f";At {b.x_coord:.1f} {b.y_coord:.1f}"
+                    # Label At
+                    idx += 1
+                    # Scale
+                    idx += 1
+                else:
+                    raise ValueError(f";At line not found for block {current_block_id}")
+        idx += 1
 
-                        #Label at line
-                        idx +=1
-                        label_at_line = lines[idx]
-                        #scale line
-                        idx +=1
-                        scale_line = lines[idx]
-
-                    else:
-                        raise ValueError(f";At line not found for block {current_block_id}")
-            idx += 1
-
-
-
-
-    #Save the updated file contents back to the file
     with open(file_path, 'w') as f:
         f.writelines("\n".join(lines))
+    return "\n".join(lines)
 
-    return file_contents
 
 
-def assign_coordinates(layers, dx=10.0, dy=6.0, spread=1.0):
+def assign_coordinates(blocks: Dict[str, Block],
+                       layers: List[List[str]],
+                       dx: float = 10.0,
+                       dy: float = 6.0,
+                       spread: float = 1.0) -> None:
     """
-    Assign x,y coordinates: x by layer index, y spaced within each layer.
+    Assign x,y coordinates directly to each Block in `blocks`.
     - dx, dy: base spacing
     - spread: global multiplier to spread everything out uniformly
     """
-    coords = {}
     for lx, layer in enumerate(layers):
         n = max(1, len(layer))
         # auto vertical spacing so tall layers don't get cramped
@@ -320,35 +303,36 @@ def assign_coordinates(layers, dx=10.0, dy=6.0, spread=1.0):
         x = (dx * spread) * lx
         for i, bid in enumerate(layer):
             y = y0 + i * layer_dy
-            coords[bid] = (x, y)
-    return coords
+            blk = blocks[bid]
+            blk.x_coord = float(x)
+            blk.y_coord = float(y)
 
 def rescale_coords(coords, factor=1.25):
     """Uniformly scale all coordinates (quick 'zoom out')."""
     return {k: (x*factor, y*factor) for k,(x,y) in coords.items()}
 
-def draw_flowsheet(blocks, coords, figsize=(14, 8), margin=6.0):
+def draw_flowsheet(blocks: Dict[str, Block], figsize=(14, 8), margin: float = 6.0):
     input_to_blocks, _ = build_index(blocks)
 
-    # compute bounds for nicer framing
-    xs, ys = zip(*coords.values())
-    xmin, xmax = min(xs)-margin, max(xs)+margin
-    ymin, ymax = min(ys)-margin, max(ys)+margin
+    xs = [b.x_coord for b in blocks.values()]
+    ys = [b.y_coord for b in blocks.values()]
+    xmin, xmax = min(xs) - margin, max(xs) + margin
+    ymin, ymax = min(ys) - margin, max(ys) + margin
 
     fig, ax = plt.subplots(figsize=figsize)
 
     # edges
     for b in blocks.values():
-        x1, y1 = coords[b.ID]
+        x1, y1 = b.x_coord, b.y_coord
         for o in b.outputs:
             for nb in input_to_blocks.get(o, []):
-                x2, y2 = coords[nb]
-                ax.plot([x1, x2], [y1, y2])  # default style
+                x2, y2 = blocks[nb].x_coord, blocks[nb].y_coord
+                ax.plot([x1, x2], [y1, y2])
 
     # nodes + labels
-    for bid, (x,y) in coords.items():
-        ax.scatter([x], [y], s=160)
-        ax.text(x, y+0.7, bid, ha='center', va='bottom', fontsize=9)
+    for b in blocks.values():
+        ax.scatter([b.x_coord], [b.y_coord], s=160)
+        ax.text(b.x_coord, b.y_coord + 0.7, b.ID, ha='center', va='bottom', fontsize=9)
 
     ax.set_xlim(xmin, xmax)
     ax.set_ylim(ymin, ymax)
@@ -360,77 +344,85 @@ def draw_flowsheet(blocks, coords, figsize=(14, 8), margin=6.0):
     plt.show()
 
 
-def streams():
-    with open(file_path, 'r') as file:
-        file_contents = file.read()
 
-        lines = file_contents.splitlines()
-        idx = 0
-        while idx < len(lines):
-            if lines[idx] == ";STREAM":
-                current_stream_id = None  # Reset for a new stream
-            elif ";ID:" in lines[idx]:
-                current_stream_id = lines[idx].split(":")[1].strip()
-                if current_stream_id in coords:
-                    # Continue until ";AT" is found
-                    #Version
-                    idx +=1
-                    version_line = lines[idx]
-                    #Flag line
-                    idx +=1
-                    flag_line = lines[idx]
-                    #Section line
-                    idx +=1
-                    section_line = lines[idx]
-                    # Type Line
-                    idx +=1
-                    icon_line = lines[idx]
-
-                    #moving to next line to find ;AT
-                    idx +=1
-                    if ";At" in lines[idx]:
-                        x, y = coords[current_stream_id]
-                        print("Lines ", lines[idx])
-                        # Replace the coordinates in the ";AT" line
-                        print(f"Setting stream {current_stream_id} to coordinates ({x:.1f}, {y:.1f})")
-                        lines[idx] = f";At {x:.1f} {y:.1f}"
-
-                        #Label at line
-                        idx +=1
-                        label_at_line = lines[idx]
-                        #scale line
-                        idx +=1
-                        scale_line = lines[idx]
-
-                    else:
-                        raise ValueError(f";At line not found for block {current_block_id}")
-            idx += 1
+def find_block_for_stream(blocks: dict, stream: str):
+    """
+    Return the ID of the first block where `stream`
+    appears in either inputs or outputs. None if not found.
+    """
+    for key, blk in blocks.items():
+        if stream in blk.inputs or stream in blk.outputs:
+            return key
+    return None
 
 
+def entering_streams(blocks: Dict[str, Block],streams: Dict[str, Stream]) -> str:
+    with open(file_path, 'r') as f:
+        file_contents = f.read()
 
+    lines = file_contents.splitlines()
+    i = 0
+    n = len(lines)
 
-    #Save the updated file contents back to the file
+    while i < n:
+        if lines[i].strip() == ";STREAM":
+            # Expect an ;ID: line next (but be defensive)
+            j = i + 1
+            if j >= n or not lines[j].lstrip().startswith(";ID:"):
+                i += 1
+                continue
+
+            # Parse stream ID
+            current_stream_id = lines[j].split(":", 1)[1].strip()
+
+            # Find the ;At line within this STREAM block
+            k = j + 1
+            while k < n and not lines[k].lstrip().startswith(";At"):
+                k += 1
+
+            if k < n and current_stream_id in streams:
+                s = streams[current_stream_id]
+
+                # Prefer producing block(s) for placement
+                candidate_block_id = None
+                # Choose the producer with the largest x (rightmost), if multiple
+                producers = [bid for bid in s.inputs if bid in blocks]
+                if producers:
+                    candidate_block_id = max(producers, key=lambda b: blocks[b].x_coord)
+                else:
+                    # Fallback: choose a consumer (e.g., leftmost or first)
+                    consumers = [bid for bid in s.outputs if bid in blocks]
+                    if consumers:
+                        candidate_block_id = min(consumers, key=lambda b: blocks[b].x_coord)
+
+                if candidate_block_id is not None:
+                    b = blocks[candidate_block_id]
+                    x, y = b.x_coord + 10, b.y_coord
+                    lines[k] = f";At {x:.1f} {y:.1f}"
+                    # Optional: print for debugging
+                    # print(f"Placed stream {current_stream_id} near {candidate_block_id} at ({x:.1f}, {y:.1f})")
+
+            # Advance past this STREAM block’s ;At line if we found it
+            i = k
+        i += 1
+
+    out = "\n".join(lines)
     with open(file_path, 'w') as f:
-        f.writelines("\n".join(lines))
-
-    return file_contents
+        f.write(out)
+    return out
 
 # ---------- example usage ----------
 if __name__ == "__main__":
-    # prompt user to select file type .inp
     flowsheet_text = reading_in_flowsheet()
 
-    blocks = parse_flowsheet(flowsheet_text)
-
-    blocks = parse_flowsheet(flowsheet_text)
+    blocks, streams = parse_flowsheet(flowsheet_text)
     roots = find_first_elements(blocks)
-    end = find_last_elements(blocks)
-
     layers = build_layers(blocks, roots)
 
-    coords = assign_coordinates(layers, dx=3, dy=5)
+    assign_coordinates(blocks, layers, dx=3, dy=5)   # writes into each Block
+    # rescale_block_coords(blocks, factor=1.2)       # optional
 
-    draw_flowsheet(blocks, coords, figsize=(16,9), margin=8.0)
+    draw_flowsheet(blocks, figsize=(16, 9), margin=8.0)
 
-    psvsdata = blocks(coords)
-    # print(psvsdata)
+    entering_blocks(blocks)
+    # entering_streams(blocks,streams)
