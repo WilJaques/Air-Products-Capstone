@@ -5,8 +5,6 @@ from collections import defaultdict
 from tkinter import Tk, filedialog
 import matplotlib.pyplot as plt
 
-
-
 # Tokens are alnum + underscore
 TOKEN = r"[A-Za-z0-9_]+"
 
@@ -22,8 +20,6 @@ OUT_RE = re.compile(rf"\bOUT=([A-Za-z0-9_ ]+)\s*$")
 STREAM_LINE_RE = re.compile(rf"^\s*STREAM\s+({TOKEN})\s+(.*?)\s*$", re.MULTILINE)
 FROM_RE = re.compile(r"\bFROM=([A-Za-z0-9_]+)")
 TO_RE = re.compile(r"\bTO=([A-Za-z0-9_]+)")
-
-file_path = ""
 
 @dataclass
 class Block:
@@ -67,7 +63,6 @@ def parse_flowsheet(text: str) -> Dict[str, Block]:
 
 def reading_in_flowsheet():
     Tk().withdraw()
-    global file_path
     # Prompt user to select a file with .inp extension
     file_path = filedialog.askopenfilename(
         title="Select a .inp file",
@@ -76,8 +71,6 @@ def reading_in_flowsheet():
 
     if not file_path:
         raise FileNotFoundError("No file selected.")
-
-    file_path = file_path
 
     # Read the contents of the selected file
     with open(file_path, 'r') as file:
@@ -97,8 +90,7 @@ def reading_in_flowsheet():
     # Combine the extracted lines into a single string
     flowsheet_text = "\n".join(flowsheet_lines)
 
-    return flowsheet_text
-
+    return flowsheet_text, file_path
 
 def find_first_elements(blocks: Dict[str, Block]) -> List[str]:
     # Collect all outputs from all blocks
@@ -125,53 +117,6 @@ def find_last_elements(blocks: Dict[str, Block]) -> List[str]:
         if block.outputs and all(out not in all_inputs for out in block.outputs):
             last_element.append(block.ID)
     return last_element
-
-
-
-def build_flowsheet_tree(blocks: Dict[str, Block], roots: List[str]) -> List[List[str]]:
-    """
-    Build a tree-like structure where each layer contains block IDs that are connected
-    to the previous layer via outputs->inputs.
-    Ensures that last elements (from find_last_elements) are placed in the final layer.
-    Returns a list of layers, each a list of block IDs.
-    """
-    # Map input stream -> block(s) that consume it
-    input_to_blocks = defaultdict(list)
-    for block in blocks.values():
-        for inp in block.inputs:
-            input_to_blocks[inp].append(block.ID)
-
-    visited = set()
-    layers = []
-    current_layer = list(roots)
-    while current_layer:
-        layers.append(current_layer)
-        next_layer = []
-        for block_id in current_layer:
-            if block_id in visited:
-                continue
-            visited.add(block_id)
-            block = blocks[block_id]
-            for out in block.outputs:
-                for next_block_id in input_to_blocks.get(out, []):
-                    if next_block_id not in visited and next_block_id not in next_layer:
-                        next_layer.append(next_block_id)
-        current_layer = next_layer
-
-    # Ensure all last elements are in the final layer
-    last_elements = find_last_elements(blocks)
-    already_in_layers = {bid for layer in layers for bid in layer}
-    missing_last = [bid for bid in last_elements if bid not in already_in_layers]
-    if missing_last:
-        layers.append(missing_last)
-    else:
-        # Add any last elements not already in the last layer to the last layer
-        last_layer = set(layers[-1])
-        for bid in last_elements:
-            if bid not in last_layer:
-                layers[-1].append(bid)
-    return layers
-
 
 def build_index(blocks: Dict[str, Block]):
     input_to_blocks = defaultdict(list)
@@ -226,72 +171,7 @@ def build_layers(blocks: Dict[str, Block], roots: List[str]) -> List[List[str]]:
         layers.append(remaining)
     return layers
 
-def assign_coordinates(layers: List[List[str]], dx: float=10.0, dy: float=6.0) -> Dict[str, Tuple[float,float]]:
-    coords = {}
-    for lx, layer in enumerate(layers):
-        n = len(layer)
-        y0 = -(n-1)/2.0 * dy
-        for i, bid in enumerate(layer):
-            x = lx * dx
-            y = y0 + i*dy
-            coords[bid] = (x, y)
-    return coords
-
-def draw_flowsheet(blocks, coords, streams=None, stream_coords=None, figsize=(14, 8), margin=6.0):
-    input_to_blocks, _ = build_index(blocks)
-    xs, ys = zip(*coords.values())
-    xmin, xmax = min(xs)-margin, max(xs)+margin
-    ymin, ymax = min(ys)-margin, max(ys)+margin
-
-    fig, ax = plt.subplots(figsize=figsize)
-
-    # Draw blocks
-    for bid, (x, y) in coords.items():
-        ax.scatter([x], [y], s=160, color='skyblue', zorder=3)
-        ax.text(x, y+0.7, bid, ha='center', va='bottom', fontsize=9, zorder=4)
-
-    # Draw streams with 90-degree angles
-    if streams and stream_coords:
-        for s in streams.values():
-            if s.ID in stream_coords:
-                path, label_pos = stream_coords[s.ID]
-                
-                # Draw the path segments
-                for i in range(len(path)-1):
-                    (x1, y1), (x2, y2) = path[i], path[i+1]
-                    ax.plot([x1, x2], [y1, y2], color='orange', lw=1.5, zorder=1)
-                
-                # Add arrow at the end
-                end_segment = path[-2], path[-1]
-                mid_x = (end_segment[0][0] + end_segment[1][0]) / 2
-                mid_y = (end_segment[0][1] + end_segment[1][1]) / 2
-                dx = end_segment[1][0] - end_segment[0][0]
-                dy = end_segment[1][1] - end_segment[0][1]
-                
-                # Create arrow
-                ax.annotate("", 
-                    xy=end_segment[1], xytext=(mid_x, mid_y),
-                    arrowprops=dict(arrowstyle="->", color='orange', lw=1.5),
-                    zorder=2
-                )
-                
-                # Add stream label
-                lx, ly = label_pos
-                ax.text(lx, ly, s.ID, color='orange', fontsize=8, 
-                        ha='center', va='center', zorder=2,
-                        bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1))
-
-    ax.set_xlim(xmin, xmax)
-    ax.set_ylim(ymin, ymax)
-    ax.set_aspect('equal', adjustable='datalim')
-    ax.grid(True)
-    ax.set_title("Auto-arranged flowsheet")
-    ax.set_xlabel("Layer (left → right)")
-    ax.set_ylabel("Relative position")
-    plt.show()
-
-
-def blocks(coords: Dict[str, Tuple[float,float]]) -> str:
+def blocks(file_path: str, coords: Dict[str, Tuple[float,float]]) -> str:
     """
     Parse the input file to find blocks and generate pfsdata output.
     """
@@ -341,15 +221,13 @@ def blocks(coords: Dict[str, Tuple[float,float]]) -> str:
                         raise ValueError(f";At line not found for block {current_block_id}")
             idx += 1
 
-
-
-
+    updated_content = "\n".join(lines)
+    
     #Save the updated file contents back to the file
     with open(file_path, 'w') as f:
-        f.writelines("\n".join(lines))
+        f.write(updated_content)
 
-    return file_contents
-
+    return updated_content
 
 def assign_coordinates(layers, dx=10.0, dy=6.0, spread=1.0):
     """
@@ -426,8 +304,7 @@ def draw_flowsheet(blocks, coords, streams=None, stream_coords=None, figsize=(14
     ax.set_ylabel("Relative position")
     plt.show()
 
-
-def streams():
+def streams(file_path: str, coords: Dict[str, Tuple[float, float]]):
     with open(file_path, 'r') as file:
         file_contents = file.read()
 
@@ -473,14 +350,13 @@ def streams():
                         raise ValueError(f";At line not found for block {current_block_id}")
             idx += 1
 
-
-
-
+    updated_content = "\n".join(lines)
+        
     #Save the updated file contents back to the file
     with open(file_path, 'w') as f:
-        f.writelines("\n".join(lines))
+            f.write(updated_content)
 
-    return file_contents
+    return updated_content 
 
 def stream_coords(streams: Dict[str, Stream], block_coords: Dict[str, Tuple[float, float]]) -> Dict[str, Tuple[List[Tuple[float, float]], Tuple[float, float]]]:
     """
@@ -583,17 +459,43 @@ def parse_streams(flowsheet_text: str, blocks: Dict[str, Block]) -> Dict[str, St
         )
     return streams
 
-# ---------- example usage ----------
+def main():
+    """
+    Main function to run the flowsheet generation process.
+    """
+    try:
+        flowsheet_text, file_path = reading_in_flowsheet()
+        blocks_data = parse_flowsheet(flowsheet_text)
+        
+        if not blocks_data:
+            print("No blocks were parsed. Please check the input file format.")
+            return
+
+        roots = find_first_elements(blocks_data)
+        if not roots:
+            print("Warning: Could not determine starting blocks for the layout.")
+            # Fallback: use all blocks with no inputs, or the first block if none exist
+            roots = [bid for bid, b in blocks_data.items() if not b.inputs]
+            if not roots and blocks_data:
+                roots = [next(iter(blocks_data))]
+        
+        layers = build_layers(blocks_data, roots)
+        coords = assign_coordinates(layers, dx=12, dy=8, spread=1.5)
+
+        streams_data = parse_streams(flowsheet_text, blocks_data)
+        stream_pos = stream_coords(streams_data, coords)
+
+        draw_flowsheet(blocks_data, coords, streams=streams_data, stream_coords=stream_pos, figsize=(16,10), margin=10.0)
+
+    except FileNotFoundError as e:
+        print(f"Operation cancelled: {e}")
+    except ValueError as e:
+        print(f"Error processing file: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+
+# ---------- script execution ----------
 if __name__ == "__main__":
-    flowsheet_text = reading_in_flowsheet()
-    blocks = parse_flowsheet(flowsheet_text)
-    roots = find_first_elements(blocks)
-    layers = build_layers(blocks, roots)
-    coords = assign_coordinates(layers, dx=10, dy=20)
+    main()
 
-    # Parse streams
-    streams = parse_streams(flowsheet_text, blocks)
-    stream_pos = stream_coords(streams, coords)
-
-    # Draw with streams
-    draw_flowsheet(blocks, coords, streams=streams, stream_coords=stream_pos, figsize=(16,9), margin=8.0)
+    plt.close('all') 
