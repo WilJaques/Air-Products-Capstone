@@ -1,90 +1,138 @@
 """
-Parsing module for flowsheet processing.
+Enhanced parsing module for flowsheet processing.
 
-This module contains functions and regex patterns for parsing flowsheet
-text files and extracting block and stream information.
+This module contains functions for parsing Aspen Plus input files, extracting
+block and stream information including route coordinates for visualization.
 """
 
 import re
-from typing import Dict
-from models import Block, Stream
+from typing import Dict, List, Tuple
+from models import Block, Stream, Route, RoutePoint
 
-# Tokens are alnum + underscore
-TOKEN = r"[A-Za-z0-9_]+"
+# Regular expressions for PFS section elements
+BLOCK_SECTION_RE = re.compile(r';BLOCK\s*\n;ID:\s*([A-Za-z0-9_]+)')
+STREAM_SECTION_RE = re.compile(r';STREAM\s*\n;ID:\s*([A-Za-z0-9_]+)')
+AT_COORD_RE = re.compile(r';At\s+([-\d\.]+)\s+([-\d\.]+)')
+ROUTE_START_RE = re.compile(r';ROUTE\s+(\d+)\s+(\d+)')
+ROUTE_POINT_RE = re.compile(r';([rtxy])\s+([rludxy])\s+([-\d\.]+)\s+([-\d\.]+)\s+(\d+)')
 
-# Match a flowsheet line defining a block
-LINE_RE = re.compile(rf"^\s*BLOCK\s+({TOKEN})\s+(.*?)\s*$", re.MULTILINE)
-
-# Extract IN=... stopping before OUT= or end of line
-IN_RE = re.compile(rf"\bIN=([A-Za-z0-9_ ]+?)(?=\s+OUT=|\s*$)")
-# Extract OUT=... to end of line
-OUT_RE = re.compile(rf"\bOUT=([A-Za-z0-9_ ]+)\s*$")
-
-# Match a flowsheet line defining a stream
-STREAM_LINE_RE = re.compile(rf"^\s*STREAM\s+({TOKEN})\s+(.*?)\s*$", re.MULTILINE)
-FROM_RE = re.compile(r"\bFROM=([A-Za-z0-9_]+)")
-TO_RE = re.compile(r"\bTO=([A-Za-z0-9_]+)")
-
-def parse_flowsheet(text: str) -> Dict[str, Block]:
+def parse_flowsheet_pfs(text: str) -> Tuple[Dict[str, Block], Dict[str, Stream]]:
     """
-    Parse BLOCK lines and return {block_ID: Block(ID, inputs, outputs)}.
+    Parse the PFS section of an Aspen input file to extract block and stream data
+    with coordinates and routing information.
     
     Args:
-        text: The flowsheet text to parse
+        text: The complete Aspen input file text
         
     Returns:
-        Dictionary mapping block IDs to Block objects
+        Tuple containing dictionaries of Block and Stream objects with visual information
     """
-    blocks: Dict[str, Block] = {}
-
-    for m in LINE_RE.finditer(text):
-        ID, rest = m.group(1), m.group(2)
-        blk = blocks.get(ID) or Block(ID)
-        # Find inputs/outputs independently (order on the line can vary)
-        mi = IN_RE.search(rest)
-        mo = OUT_RE.search(rest)
-
-        if mi:
-            blk.inputs = mi.group(1).split()
-        if mo:
-            blk.outputs = mo.group(1).split()
-
-        blocks[ID] = blk
-
-    # # Debug: print parsed blocks
-    # for ID, b in blocks.items():
-    #     print(f"{ID}: IN={b.inputs}  OUT={b.outputs}")
-
-    return blocks
-
-def parse_streams(flowsheet_text: str, blocks: Dict[str, Block]) -> Dict[str, Stream]:
-    """
-    Infer streams and their connections from block IN/OUT assignments.
+    # Find PFS section
+    pfs_section = re.search(r';PFS.*', text, re.DOTALL)
+    if not pfs_section:
+        raise ValueError("PFS section not found in the input file")
     
-    Args:
-        flowsheet_text: The flowsheet text (not currently used but kept for consistency)
-        blocks: Dictionary of parsed blocks
+    pfs_text = pfs_section.group(0)
+    
+    # Extract blocks with coordinates
+    blocks = {}
+    for block_match in BLOCK_SECTION_RE.finditer(pfs_text):
+        block_id = block_match.group(1)
+        block = Block(block_id)
         
-    Returns:
-        Dictionary mapping stream IDs to Stream objects with from/to block connections
-    """
-    # Map stream -> from_block and to_block
-    stream_to_from_block = {}
-    stream_to_to_block = {}
-
-    for block in blocks.values():
-        for s in block.outputs:
-            stream_to_from_block[s] = block.ID
-        for s in block.inputs:
-            stream_to_to_block[s] = block.ID
-
-    # All streams mentioned in IN/OUT
-    all_streams = set(stream_to_from_block) | set(stream_to_to_block)
+        # Find position in text right after this block ID
+        start_pos = block_match.end()
+        end_pos = pfs_text.find(";BLOCK", start_pos)
+        if end_pos == -1:
+            end_pos = pfs_text.find(";STREAM", start_pos)
+        
+        block_text = pfs_text[start_pos:end_pos]
+        
+        # Extract coordinates
+        coord_match = AT_COORD_RE.search(block_text)
+        if coord_match:
+            x, y = float(coord_match.group(1)), float(coord_match.group(2))
+            block.x_coord = x
+            block.y_coord = y
+        
+        blocks[block_id] = block
+    
+    # Extract streams with routes
     streams = {}
-    for s in all_streams:
-        streams[s] = Stream(
-            ID=s,
-            from_block=stream_to_from_block.get(s, ""),
-            to_block=stream_to_to_block.get(s, "")
-        )
-    return streams
+    for stream_match in STREAM_SECTION_RE.finditer(pfs_text):
+        stream_id = stream_match.group(1)
+        stream = Stream(ID=stream_id)
+        
+        # Find position in text right after this stream ID
+        start_pos = stream_match.end()
+        end_pos = pfs_text.find(";STREAM", start_pos)
+        if end_pos == -1:
+            end_pos = len(pfs_text)
+        
+        stream_text = pfs_text[start_pos:end_pos]
+        
+        # Extract stream coordinates
+        coord_match = AT_COORD_RE.search(stream_text)
+        if coord_match:
+            x, y = float(coord_match.group(1)), float(coord_match.group(2))
+            stream.x_coord = x
+            stream.y_coord = y
+        
+        # Extract routes
+        stream.routes = []
+        current_route = None
+        
+        for line in stream_text.split('\n'):
+            route_start = ROUTE_START_RE.search(line)
+            if route_start:
+                route_num = int(route_start.group(1))
+                # Start a new route
+                current_route = Route(route_num)
+                stream.routes.append(current_route)
+                continue
+            
+            route_point = ROUTE_POINT_RE.search(line)
+            if current_route is not None and route_point:
+                point_type = route_point.group(1)  # r, t, x, y
+                direction = route_point.group(2)   # r, l, u, d, x, y
+                x = float(route_point.group(3))
+                y = float(route_point.group(4))
+                z = int(route_point.group(5))
+                
+                point = RoutePoint(point_type, direction, x, y, z)
+                current_route.points.append(point)
+        
+        streams[stream_id] = stream
+    
+    return blocks, streams
+
+def extract_flowsheet_connections(text: str) -> Dict[str, List[Tuple[str, str]]]:
+    """
+    Parse the FLOWSHEET section to extract block connections.
+    
+    Args:
+        text: The complete Aspen input file text
+        
+    Returns:
+        Dictionary mapping block IDs to lists of (input_stream, output_stream) tuples
+    """
+    # Find FLOWSHEET section
+    flowsheet_section = re.search(r'FLOWSHEET\s*(.*?)(?:\n\s*\n|\n[A-Z])', text, re.DOTALL)
+    if not flowsheet_section:
+        raise ValueError("FLOWSHEET section not found in the input file")
+    
+    flowsheet_text = flowsheet_section.group(1)
+    
+    # Parse block connections
+    connections = {}
+    block_re = re.compile(r'BLOCK\s+([A-Za-z0-9_]+)\s+IN=([A-Za-z0-9_ ]+)\s+OUT=([A-Za-z0-9_ ]+)')
+    
+    for line in flowsheet_text.split('\n'):
+        match = block_re.search(line)
+        if match:
+            block_id = match.group(1)
+            inputs = match.group(2).strip().split()
+            outputs = match.group(3).strip().split()
+            connections[block_id] = (inputs, outputs)
+    
+    return connections

@@ -1,160 +1,157 @@
 """
-Visualization module for flowsheet processing.
+Enhanced visualization module for flowsheet processing.
 
-This module contains functions for drawing flowsheets and calculating
-stream coordinates for visualization.
+This module contains functions for drawing optimized flowsheets with
+minimal stream crossings and overlaps.
 """
 
-from typing import Dict, List, Tuple, Optional
-from collections import defaultdict
 import matplotlib.pyplot as plt
-from models import Block, Stream
-from layout import build_index
+import matplotlib.patches as patches
+from typing import Dict, List, Tuple
+from models import Block, Stream, Route, RoutePoint
+import numpy as np
 
-def stream_coords(streams: Dict[str, Stream], block_coords: Dict[str, Tuple[float, float]]) -> Dict[str, Tuple[List[Tuple[float, float]], Tuple[float, float]]]:
+def draw_optimized_flowsheet(
+    blocks: Dict[str, Block],
+    streams: Dict[str, Stream],
+    stream_paths: Dict[str, List[RoutePoint]],
+    figsize: Tuple[int, int] = (16, 10),
+    block_size: float = 1.0,
+    output_path: str = None
+) -> plt.Figure:
     """
-    Creates 90-degree angle paths for stream connections with right angle turns.
+    Draw a flowsheet with optimized block positions and stream paths.
     
     Args:
-        streams: Dictionary mapping stream IDs to Stream objects
-        block_coords: Dictionary mapping block IDs to (x, y) coordinate tuples
+        blocks: Dictionary of blocks with coordinates
+        streams: Dictionary of streams
+        stream_paths: Dictionary of stream paths (lists of RoutePoints)
+        figsize: Figure size (width, height) in inches
+        block_size: Size of blocks in the visualization
+        output_path: Path to save the figure (None for display only)
         
     Returns:
-        Dictionary mapping stream IDs to (path_points, label_position) tuples
+        Matplotlib Figure object
     """
-    pair_to_streams = defaultdict(list)
-    for s in streams.values():
-        if s.from_block in block_coords and s.to_block in block_coords:
-            pair = (s.from_block, s.to_block)
-            pair_to_streams[pair].append(s.ID)
-
-    coords = {}
-    offset_dist = 0.8  # Base offset distance from block center
-    block_radius = 0.5  # Estimated visual size of block to avoid overlap
-
-    for (from_block, to_block), stream_ids in pair_to_streams.items():
-        x1, y1 = block_coords[from_block]
-        x2, y2 = block_coords[to_block]
-        n = len(stream_ids)
-        
-        # Calculate perpendicular direction for offsets
-        dx = x2 - x1
-        dy = y2 - y1
-        length = (dx**2 + dy**2) ** 0.5 or 1.0
-        perp_x = -dy / length
-        perp_y = dx / length
-        
-        for i, stream_id in enumerate(stream_ids):
-            # Calculate offset for this specific stream
-            stream_offset = (i - (n-1)/2) * offset_dist
-            
-            # Starting point - offset from first block
-            sx = x1 + perp_x * stream_offset
-            sy = y1 + perp_y * stream_offset
-            
-            # Exit point from block (with clearance)
-            exit_x = x1 + (dx / length) * block_radius
-            exit_y = y1 + (dy / length) * block_radius
-            
-            # Ending point - offset from second block
-            ex = x2 + perp_x * stream_offset
-            ey = y2 + perp_y * stream_offset
-            
-            # Entry point to block (with clearance)
-            entry_x = x2 - (dx / length) * block_radius
-            entry_y = y2 - (dy / length) * block_radius
-            
-            # Create path with 90-degree angles
-            # First determine if primarily horizontal or vertical
-            if abs(dx) > abs(dy):  # Horizontal dominant
-                # Create horizontal-vertical-horizontal path
-                mid_x = (sx + ex) / 2
-                path = [
-                    (sx, sy),
-                    (mid_x, sy),
-                    (mid_x, ey),
-                    (ex, ey)
-                ]
-                # Label position at the vertical segment
-                label_pos = (mid_x, (sy + ey) / 2)
-            else:  # Vertical dominant
-                # Create vertical-horizontal-vertical path
-                mid_y = (sy + ey) / 2
-                path = [
-                    (sx, sy),
-                    (sx, mid_y),
-                    (ex, mid_y),
-                    (ex, ey)
-                ]
-                # Label position at the horizontal segment
-                label_pos = ((sx + ex) / 2, mid_y)
-                
-            coords[stream_id] = (path, label_pos)
-    return coords
-
-def draw_flowsheet(blocks: Dict[str, Block], coords: Dict[str, Tuple[float, float]], 
-                  streams: Optional[Dict[str, Stream]] = None, 
-                  stream_coords_dict: Optional[Dict[str, Tuple[List[Tuple[float, float]], Tuple[float, float]]]] = None, 
-                  figsize: Tuple[int, int] = (14, 8), margin: float = 6.0) -> None:
-    """
-    Draw the flowsheet with blocks and streams.
+    # Extract coordinates for bounds calculation
+    x_coords = [block.x_coord for block in blocks.values()]
+    y_coords = [block.y_coord for block in blocks.values()]
     
-    Args:
-        blocks: Dictionary mapping block IDs to Block objects
-        coords: Dictionary mapping block IDs to (x, y) coordinate tuples
-        streams: Optional dictionary mapping stream IDs to Stream objects
-        stream_coords_dict: Optional dictionary with stream paths and label positions
-        figsize: Figure size as (width, height) tuple
-        margin: Margin around the plot
-    """
-    input_to_blocks, _ = build_index(blocks)
-    xs, ys = zip(*coords.values())
-    xmin, xmax = min(xs)-margin, max(xs)+margin
-    ymin, ymax = min(ys)-margin, max(ys)+margin
-
+    # Add padding
+    padding = 2.0
+    x_min, x_max = min(x_coords) - padding, max(x_coords) + padding
+    y_min, y_max = min(y_coords) - padding, max(y_coords) + padding
+    
+    # Create figure
     fig, ax = plt.subplots(figsize=figsize)
-
+    
+    # Draw streams first (so blocks appear on top)
+    colors = plt.cm.Dark2.colors
+    for i, (stream_id, path) in enumerate(stream_paths.items()):
+        color = colors[i % len(colors)]
+        
+        # Extract points
+        points = [(p.x, p.y) for p in path]
+        
+        # Draw segments
+        for j in range(len(points) - 1):
+            x1, y1 = points[j]
+            x2, y2 = points[j+1]
+            
+            ax.plot([x1, x2], [y1, y2], 
+                   color=color, 
+                   linewidth=1.5, 
+                   alpha=0.8,
+                   solid_capstyle='round',
+                   zorder=5)
+        
+        # Draw arrow at end
+        if len(points) >= 2:
+            # Get last two points for direction
+            p1, p2 = points[-2], points[-1]
+            
+            # Calculate arrow direction
+            dx = p2[0] - p1[0]
+            dy = p2[1] - p1[1]
+            if dx == 0 and dy == 0:
+                # Avoid zero direction
+                dx, dy = 1.0, 0.0
+                
+            length = np.sqrt(dx*dx + dy*dy)
+            dx, dy = dx/length, dy/length
+            
+            # Draw arrow
+            ax.arrow(p2[0] - dx*0.5, p2[1] - dy*0.5,
+                    dx*0.3, dy*0.3,
+                    head_width=0.2,
+                    head_length=0.3,
+                    fc=color,
+                    ec=color,
+                    zorder=7)
+        
+        # Add stream label near middle of path
+        if len(points) > 1:
+            mid_idx = len(points) // 2
+            mid_x = (points[mid_idx-1][0] + points[mid_idx][0]) / 2
+            mid_y = (points[mid_idx-1][1] + points[mid_idx][1]) / 2
+            
+            ax.text(mid_x, mid_y, stream_id,
+                   fontsize=8,
+                   ha='center', va='center',
+                   bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1),
+                   zorder=20)
+    
     # Draw blocks
-    for bid, (x, y) in coords.items():
-        ax.scatter([x], [y], s=160, color='skyblue', zorder=3)
-        ax.text(x, y+0.7, bid, ha='center', va='bottom', fontsize=9, zorder=4)
-
-    # Draw streams with 90-degree angles
-    if streams and stream_coords_dict:
-        for s in streams.values():
-            if s.ID in stream_coords_dict:
-                path, label_pos = stream_coords_dict[s.ID]
-                
-                # Draw the path segments
-                for i in range(len(path)-1):
-                    (x1, y1), (x2, y2) = path[i], path[i+1]
-                    ax.plot([x1, x2], [y1, y2], color='orange', lw=1.5, zorder=1)
-                
-                # Add arrow at the end
-                end_segment = path[-2], path[-1]
-                mid_x = (end_segment[0][0] + end_segment[1][0]) / 2
-                mid_y = (end_segment[0][1] + end_segment[1][1]) / 2
-                dx = end_segment[1][0] - end_segment[0][0]
-                dy = end_segment[1][1] - end_segment[0][1]
-                
-                # Create arrow
-                ax.annotate("", 
-                    xy=end_segment[1], xytext=(mid_x, mid_y),
-                    arrowprops=dict(arrowstyle="->", color='orange', lw=1.5),
-                    zorder=2
-                )
-                
-                # Add stream label
-                lx, ly = label_pos
-                ax.text(lx, ly, s.ID, color='orange', fontsize=8, 
-                        ha='center', va='center', zorder=2,
-                        bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1))
-
-    ax.set_xlim(xmin, xmax)
-    ax.set_ylim(ymin, ymax)
-    ax.set_aspect('equal', adjustable='datalim')
-    ax.grid(True)
-    ax.set_title("Auto-arranged flowsheet")
-    ax.set_xlabel("Layer (left → right)")
-    ax.set_ylabel("Relative position")
-    plt.show()
+    block_colors = {
+        'HeatX': 'lightblue',
+        'Flash2': 'lightgreen',
+        'Compr': 'salmon',
+        'Mixer': 'khaki',
+        'RadFrac': 'plum',
+        'Pump': 'paleturquoise',
+        'RGibbs': 'orange',
+        'RStoic': 'gold',
+        'Valve': 'pink',
+        'Sep': 'lightgray'
+    }
+    
+    for block_id, block in blocks.items():
+        # Get block type for color
+        block_type = block.block_type if block.block_type else 'default'
+        color = block_colors.get(block_type, 'lightgray')
+        
+        # Draw block as rectangle
+        rect = patches.Rectangle(
+            (block.x_coord - block_size/2, block.y_coord - block_size/2),
+            block_size, block_size,
+            facecolor=color,
+            edgecolor='black',
+            linewidth=1.0,
+            alpha=0.8,
+            zorder=10
+        )
+        ax.add_patch(rect)
+        
+        # Add block label
+        ax.text(block.x_coord, block.y_coord, block_id,
+               fontsize=9,
+               ha='center', va='center',
+               fontweight='bold',
+               zorder=15)
+    
+    # Set axis properties
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+    ax.set_aspect('equal')
+    
+    # Add grid
+    ax.grid(True, linestyle='--', alpha=0.3)
+    
+    # Add title
+    ax.set_title('Optimized Process Flowsheet')
+    
+    # Save if output path provided
+    if output_path:
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    
+    return fig
