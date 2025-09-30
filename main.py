@@ -70,7 +70,6 @@ def main():
         blocks, 
         streams,
         iterations=args.iterations,
-        preserve_layers=True
     )
     
     # Calculate optimal stream paths
