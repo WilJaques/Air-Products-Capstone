@@ -262,6 +262,7 @@ def _align_to_grid(blocks: Dict[str, Block], grid_size: float = 0.5) -> None:
 def optimize_stream_routing(blocks: Dict[str, Block], streams: Dict[str, Stream]) -> Dict[str, List[RoutePoint]]:
     """
     Generate stream routes between blocks with improved terminal handling.
+    Terminal streams (inputs/outputs) are kept close to their connected blocks.
     
     Args:
         blocks: Dictionary of optimized block positions
@@ -315,32 +316,34 @@ def optimize_stream_routing(blocks: Dict[str, Block], streams: Dict[str, Stream]
         route_points = _convert_to_route_points(path_points)
         stream_routes[stream_id] = route_points
     
-    # Process terminal streams - position them better
+    # Process terminal streams - keep them short and close to blocks
     
-    # Input streams - position on left side or top of blocks
+    # Input streams - position on left side of blocks with short paths
     for stream_id, stream in input_streams:
         if stream.to_block in blocks:
             dst_block = blocks[stream.to_block]
             
-            # Position stream coming from left if possible
-            external_point = (dst_block.x_coord - 2.0, dst_block.y_coord)
+            # Position stream coming from left, very close (short distance)
+            offset = 1.0  # Short offset distance
+            external_point = (dst_block.x_coord - offset, dst_block.y_coord)
             
-            # Generate shorter path
+            # Generate short, direct path
             path_points = [external_point, (dst_block.x_coord, dst_block.y_coord)]
             
             # Convert path to RoutePoints
             route_points = _convert_to_route_points(path_points)
             stream_routes[stream_id] = route_points
     
-    # Output streams - position on right side or bottom of blocks
+    # Output streams - position on right side of blocks with short paths
     for stream_id, stream in output_streams:
         if stream.from_block in blocks:
             src_block = blocks[stream.from_block]
             
-            # Position stream going to right if possible
-            external_point = (src_block.x_coord + 2.0, src_block.y_coord)
+            # Position stream going to right, very close (short distance)
+            offset = 1.0  # Short offset distance
+            external_point = (src_block.x_coord + offset, src_block.y_coord)
             
-            # Generate shorter path
+            # Generate short, direct path
             path_points = [(src_block.x_coord, src_block.y_coord), external_point]
             
             # Convert path to RoutePoints

@@ -25,6 +25,7 @@ def main():
     parser.add_argument("--visualize", "-v", action="store_true", help="Show visualization")
     parser.add_argument("--save-image", "-s", help="Path to save visualization image")
     parser.add_argument("--iterations", "-i", type=int, default=50, help="Number of optimization iterations")
+    parser.add_argument("--clear-routes", "-c", action="store_true", help="Clear existing routes and regenerate optimal paths")
     
     args = parser.parse_args()
     
@@ -64,6 +65,13 @@ def main():
             if stream_id in outputs:
                 stream.from_block = block_id
     
+    # Clear existing routes if requested
+    if args.clear_routes:
+        print("Clearing existing routes for fresh optimization...")
+        for stream in streams.values():
+            stream.x_coord_route = []
+            stream.y_coord_route = []
+    
     # Optimize block positions
     print(f"Optimizing block positions ({args.iterations} iterations)...")
     optimized_blocks = optimize_block_positions(
@@ -95,7 +103,8 @@ def main():
         args.input_file,
         args.output,
         optimized_blocks,
-        stream_paths
+        stream_paths,
+        streams  # Pass streams dictionary
     )
     
     print("Done!")
